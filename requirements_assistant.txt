@@ -1,0 +1,7 @@
+ultralytics
+opencv-python==4.8.1.78
+torch
+numpy<2
+pyttsx3
+requests
+pillow
