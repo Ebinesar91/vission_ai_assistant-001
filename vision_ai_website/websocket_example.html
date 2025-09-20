@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vision AI WebSocket Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+        }
+        .btn {
+            background: linear-gradient(45deg, #4ecdc4, #44a08d);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+            transition: all 0.3s ease;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(78, 205, 196, 0.4);
+        }
+        .btn.danger {
+            background: linear-gradient(45deg, #ff6b6b, #ff4757);
+        }
+        .btn.danger:hover {
+            box-shadow: 0 5px 15px rgba(255, 107, 107, 0.4);
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 8px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background: rgba(78, 205, 196, 0.2);
+            color: #4ecdc4;
+        }
+        .status.disconnected {
+            background: rgba(255, 107, 107, 0.2);
+            color: #ff6b6b;
+        }
+        .detections {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .detection-item {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .detection-label {
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+        .detection-confidence {
+            background: rgba(78, 205, 196, 0.2);
+            padding: 5px 10px;
+            border-radius: 12px;
+            color: #4ecdc4;
+        }
+        .detection-bbox {
+            font-family: monospace;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 3px 8px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+        code {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Vision AI WebSocket Example</h1>
+        <p>This example shows how to connect to the Vision AI WebSocket endpoint to receive live detection results.</p>
+
+        <div>
+            <button class="btn" onclick="connectWebSocket()">🔗 Connect WebSocket</button>
+            <button class="btn" onclick="startDetection()">🎯 Start Detection</button>
+            <button class="btn danger" onclick="stopDetection()">⏹️ Stop Detection</button>
+            <button class="btn" onclick="disconnectWebSocket()">🔌 Disconnect</button>
+        </div>
+
+        <div id="status" class="status disconnected">🔴 Disconnected</div>
+
+        <div id="detections" class="detections" style="display: none;">
+            <h3>📊 Live Detection Results</h3>
+            <div id="detection-list"></div>
+        </div>
+
+        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.2);">
+            <h3>📝 JavaScript WebSocket Code</h3>
+            <pre><code>// Connect to WebSocket
+const ws = new WebSocket('ws://localhost:8000/ws/live');
+
+// Handle connection
+ws.onopen = function(event) {
+    console.log('WebSocket connected');
+};
+
+// Handle messages
+ws.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    console.log('Detection results:', data);
+
+    // Process detection data
+    if (data.type === 'detection') {
+        displayDetections(data.data);
+    }
+};
+
+// Handle errors
+ws.onerror = function(error) {
+    console.error('WebSocket error:', error);
+};
+
+// Handle disconnection
+ws.onclose = function(event) {
+    console.log('WebSocket disconnected');
+};
+
+// Start detection
+fetch('http://localhost:8000/detect/control', {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ action: 'start' })
+});
+
+// Stop detection
+fetch('http://localhost:8000/detect/control', {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ action: 'stop' })
+});
+            </code></pre>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let detectionInterval = null;
+
+        function updateStatus(connected) {
+            const status = document.getElementById('status');
+            const detections = document.getElementById('detections');
+
+            if (connected) {
+                status.textContent = '🟢 Connected';
+                status.className = 'status connected';
+                detections.style.display = 'block';
+            } else {
+                status.textContent = '🔴 Disconnected';
+                status.className = 'status disconnected';
+                detections.style.display = 'none';
+            }
+        }
+
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                alert('WebSocket is already connected!');
+                return;
+            }
+
+            try {
+                ws = new WebSocket('ws://localhost:8000/ws/live');
+
+                ws.onopen = function(event) {
+                    console.log('WebSocket connected');
+                    updateStatus(true);
+                };
+
+                ws.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    console.log('Received data:', data);
+
+                    if (data.type === 'detection') {
+                        displayDetections(data.data);
+                    }
+                };
+
+                ws.onerror = function(error) {
+                    console.error('WebSocket error:', error);
+                    updateStatus(false);
+                    alert('Failed to connect to WebSocket. Make sure the backend is running on port 8000.');
+                };
+
+                ws.onclose = function(event) {
+                    console.log('WebSocket disconnected');
+                    updateStatus(false);
+                };
+
+            } catch (error) {
+                console.error('Connection error:', error);
+                alert('Failed to create WebSocket connection.');
+            }
+        }
+
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            updateStatus(false);
+        }
+
+        async function startDetection() {
+            try {
+                const response = await fetch('http://localhost:8000/detect/control', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ action: 'start' })
+                });
+
+                const result = await response.json();
+                console.log('Start detection response:', result);
+
+                if (result.message) {
+                    alert('✅ ' + result.message);
+                }
+            } catch (error) {
+                console.error('Error starting detection:', error);
+                alert('Failed to start detection. Make sure the backend is running.');
+            }
+        }
+
+        async function stopDetection() {
+            try {
+                const response = await fetch('http://localhost:8000/detect/control', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ action: 'stop' })
+                });
+
+                const result = await response.json();
+                console.log('Stop detection response:', result);
+
+                if (result.message) {
+                    alert('⏹️ ' + result.message);
+                }
+            } catch (error) {
+                console.error('Error stopping detection:', error);
+                alert('Failed to stop detection. Make sure the backend is running.');
+            }
+        }
+
+        function displayDetections(detections) {
+            const detectionList = document.getElementById('detection-list');
+
+            if (!detections || detections.length === 0) {
+                detectionList.innerHTML = '<p style="text-align: center; opacity: 0.7;">No detections</p>';
+                return;
+            }
+
+            detectionList.innerHTML = detections.map(detection => `
+                <div class="detection-item">
+                    <div>
+                        <div class="detection-label">${detection.label}</div>
+                        <div class="detection-bbox">[${detection.bbox.join(', ')}]</div>
+                    </div>
+                    <div class="detection-confidence">
+                        ${(detection.confidence * 100).toFixed(1)}%
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Auto-connect on page load (optional)
+        window.addEventListener('load', function() {
+            console.log('Page loaded. Click "Connect WebSocket" to start receiving live detection results.');
+        });
+    </script>
+</body>
+</html>

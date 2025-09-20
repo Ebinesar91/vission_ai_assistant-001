@@ -1,191 +1,194 @@
 #!/usr/bin/env python3
 """
-Voice Output Module for Vision AI Assistant
-Provides offline text-to-speech functionality using pyttsx3
+Voice Output Module
+Text-to-speech using pyttsx3 for the Vision AI Assistant
 """
 
 import pyttsx3
 import threading
+import queue
 import time
 from typing import Optional
 
 
 class VoiceOutput:
-    """
-    Voice output handler for Vision AI Assistant
-    Provides offline text-to-speech with configurable settings
-    """
+    """Text-to-speech voice output using pyttsx3"""
     
     def __init__(self, 
-                 rate: int = 150, 
-                 volume: float = 0.8, 
-                 voice_index: int = 0,
-                 enable_console_output: bool = True):
+                 rate=150, 
+                 volume=0.8, 
+                 voice_id=None,
+                 queue_size=10):
         """
-        Initialize voice output engine
+        Initialize voice output
         
         Args:
-            rate: Speech rate (words per minute, default 150)
-            volume: Volume level (0.0 to 1.0, default 0.8)
-            voice_index: Voice index (0=male, 1=female, etc.)
-            enable_console_output: Whether to print to console
+            rate: Speech rate (words per minute)
+            volume: Volume level (0.0 to 1.0)
+            voice_id: Specific voice ID to use
+            queue_size: Maximum queue size for speech requests
         """
         self.rate = rate
         self.volume = volume
-        self.voice_index = voice_index
-        self.enable_console_output = enable_console_output
-        self.engine = None
-        self.is_speaking = False
-        self.speech_queue = []
-        self.thread_lock = threading.Lock()
+        self.voice_id = voice_id
+        self.queue_size = queue_size
         
-        self._initialize_engine()
+        # TTS engine
+        self.engine = None
+        
+        # Threading
+        self.speech_queue = queue.Queue(maxsize=queue_size)
+        self.speech_thread = None
+        self.is_running = False
+        self.is_speaking = False
+        
+        # Speech control
+        self.speech_enabled = True
+        self.last_speech_time = 0
+        self.min_speech_interval = 0.5  # Minimum time between speeches
+        
+        # Initialize TTS engine
+        self._initialize_tts()
+        self._start_speech_thread()
     
-    def _initialize_engine(self):
-        """Initialize pyttsx3 engine with configured settings"""
+    def _initialize_tts(self):
+        """Initialize text-to-speech engine"""
+        print("Initializing voice output...")
+        
         try:
+            # Initialize pyttsx3 engine
             self.engine = pyttsx3.init()
             
-            # Set voice properties
+            # Set speech properties
             self.engine.setProperty('rate', self.rate)
             self.engine.setProperty('volume', self.volume)
             
-            # Set voice (if available)
-            voices = self.engine.getProperty('voices')
-            if voices and len(voices) > self.voice_index:
-                self.engine.setProperty('voice', voices[self.voice_index].id)
+            # Set voice if specified
+            if self.voice_id:
+                voices = self.engine.getProperty('voices')
+                if voices and self.voice_id < len(voices):
+                    self.engine.setProperty('voice', voices[self.voice_id].id)
             
-            print("✅ Voice output engine initialized successfully!")
+            # Get available voices
+            voices = self.engine.getProperty('voices')
+            if voices:
+                print(f"Available voices: {len(voices)}")
+                for i, voice in enumerate(voices):
+                    print(f"  {i}: {voice.name} ({voice.languages})")
+            
+            print("✅ Voice output initialized successfully!")
             
         except Exception as e:
-            print(f"❌ Error initializing voice engine: {e}")
-            self.engine = None
+            print(f"❌ Error initializing voice output: {e}")
+            raise
     
-    def speak(self, text: str, blocking: bool = True):
-        """
-        Speak text aloud and optionally print to console
-        
-        Args:
-            text: Text to speak
-            blocking: Whether to wait for speech to complete
-        """
-        if not self.engine:
-            print(f"[Assistant]: {text} (Voice engine not available)")
-            return
-        
-        if not text or not text.strip():
-            return
-        
-        # Print to console if enabled
-        if self.enable_console_output:
-            print(f"[Assistant]: {text}")
-        
+    def _start_speech_thread(self):
+        """Start background speech thread"""
+        self.is_running = True
+        self.speech_thread = threading.Thread(target=self._speech_worker, daemon=True)
+        self.speech_thread.start()
+        print("✅ Speech thread started!")
+    
+    def _speech_worker(self):
+        """Background worker for speech processing"""
+        while self.is_running:
+            try:
+                # Get speech request from queue
+                speech_request = self.speech_queue.get(timeout=1.0)
+                
+                if speech_request is None:  # Shutdown signal
+                    break
+                
+                text, priority = speech_request
+                
+                # Check if speech is enabled and enough time has passed
+                if (self.speech_enabled and 
+                    time.time() - self.last_speech_time >= self.min_speech_interval):
+                    
+                    self._speak_text(text)
+                    self.last_speech_time = time.time()
+                
+                self.speech_queue.task_done()
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Error in speech worker: {e}")
+    
+    def _speak_text(self, text: str):
+        """Actually speak the text"""
         try:
-            with self.thread_lock:
-                self.is_speaking = True
+            self.is_speaking = True
+            print(f"🗣️ Speaking: {text}")
             
             # Speak the text
             self.engine.say(text)
+            self.engine.runAndWait()
             
-            if blocking:
-                self.engine.runAndWait()
-            else:
-                # Non-blocking mode - start in separate thread
-                def speak_thread():
-                    self.engine.runAndWait()
-                    with self.thread_lock:
-                        self.is_speaking = False
-                
-                thread = threading.Thread(target=speak_thread)
-                thread.daemon = True
-                thread.start()
-                
+            self.is_speaking = False
+            
         except Exception as e:
-            print(f"❌ Error speaking text: {e}")
-        finally:
-            if blocking:
-                with self.thread_lock:
-                    self.is_speaking = False
+            print(f"Error speaking text: {e}")
+            self.is_speaking = False
     
-    def speak_async(self, text: str):
-        """Speak text asynchronously (non-blocking)"""
-        self.speak(text, blocking=False)
-    
-    def speak_detection(self, label: str, steps: int, direction: str):
+    def speak(self, text: str, priority: int = 0):
         """
-        Speak a detection result in a standardized format
+        Queue text for speech
         
         Args:
-            label: Object label (e.g., "person", "chair")
-            steps: Distance in steps
-            direction: Direction ("ahead", "on your left", "on your right")
+            text: Text to speak
+            priority: Priority level (higher = more important)
         """
-        if direction == "center":
-            direction_desc = "ahead"
-        elif direction == "left":
-            direction_desc = "on your left"
-        else:  # right
-            direction_desc = "on your right"
-        
-        message = f"{label} detected, about {steps} steps {direction_desc}"
-        self.speak(message)
-    
-    def speak_multiple_detections(self, detections: list):
-        """
-        Speak multiple detections in sequence
-        
-        Args:
-            detections: List of detection dictionaries with 'label', 'steps', 'direction'
-        """
-        if not detections:
+        if not text or not text.strip():
             return
         
-        # Create combined message
-        messages = []
-        for det in detections:
-            label = det.get('label', 'object')
-            steps = det.get('steps', 1)
-            direction = det.get('direction', 'ahead')
-            
-            if direction == "center":
-                direction_desc = "ahead"
-            elif direction == "left":
-                direction_desc = "on your left"
-            else:  # right
-                direction_desc = "on your right"
-            
-            messages.append(f"{label} detected, about {steps} steps {direction_desc}")
+        if not self.speech_enabled:
+            print(f"Speech disabled, would say: {text}")
+            return
         
-        # Speak combined message
-        combined_text = ". ".join(messages) + "."
-        self.speak(combined_text)
+        try:
+            # Add to queue with priority
+            self.speech_queue.put((text.strip(), priority), block=False)
+        except queue.Full:
+            print("Speech queue is full, dropping message")
     
-    def speak_ai_response(self, response: str):
+    def speak_immediate(self, text: str):
         """
-        Speak a response from AI agent
+        Speak text immediately (blocking)
         
         Args:
-            response: AI response text
+            text: Text to speak
         """
-        self.speak(response)
-    
-    def speak_error(self, error_message: str):
-        """
-        Speak an error message
+        if not text or not text.strip():
+            return
         
-        Args:
-            error_message: Error description
-        """
-        self.speak(f"Error: {error_message}")
-    
-    def speak_status(self, status_message: str):
-        """
-        Speak a status message
+        if not self.speech_enabled:
+            print(f"Speech disabled, would say: {text}")
+            return
         
-        Args:
-            status_message: Status description
-        """
-        self.speak(status_message)
+        # Stop current speech if any
+        self.stop_speaking()
+        
+        # Speak immediately
+        self._speak_text(text.strip())
+    
+    def stop_speaking(self):
+        """Stop current speech"""
+        if self.is_speaking:
+            try:
+                self.engine.stop()
+                self.is_speaking = False
+            except Exception as e:
+                print(f"Error stopping speech: {e}")
+    
+    def clear_queue(self):
+        """Clear speech queue"""
+        while not self.speech_queue.empty():
+            try:
+                self.speech_queue.get_nowait()
+                self.speech_queue.task_done()
+            except queue.Empty:
+                break
     
     def set_rate(self, rate: int):
         """Set speech rate"""
@@ -194,20 +197,42 @@ class VoiceOutput:
             self.engine.setProperty('rate', rate)
     
     def set_volume(self, volume: float):
-        """Set volume level"""
+        """Set speech volume"""
         self.volume = max(0.0, min(1.0, volume))
         if self.engine:
             self.engine.setProperty('volume', self.volume)
     
-    def set_voice(self, voice_index: int):
-        """Set voice index"""
-        if not self.engine:
-            return
-        
-        voices = self.engine.getProperty('voices')
-        if voices and len(voices) > voice_index:
-            self.engine.setProperty('voice', voices[voice_index].id)
-            self.voice_index = voice_index
+    def set_voice(self, voice_id: int):
+        """Set voice by ID"""
+        if self.engine:
+            voices = self.engine.getProperty('voices')
+            if voices and 0 <= voice_id < len(voices):
+                self.engine.setProperty('voice', voices[voice_id].id)
+                self.voice_id = voice_id
+    
+    def enable_speech(self):
+        """Enable speech output"""
+        self.speech_enabled = True
+        print("✅ Speech output enabled")
+    
+    def disable_speech(self):
+        """Disable speech output"""
+        self.speech_enabled = False
+        self.stop_speaking()
+        self.clear_queue()
+        print("🔇 Speech output disabled")
+    
+    def get_status(self):
+        """Get current status"""
+        return {
+            'is_running': self.is_running,
+            'is_speaking': self.is_speaking,
+            'speech_enabled': self.speech_enabled,
+            'queue_size': self.speech_queue.qsize(),
+            'rate': self.rate,
+            'volume': self.volume,
+            'voice_id': self.voice_id
+        }
     
     def get_available_voices(self):
         """Get list of available voices"""
@@ -215,129 +240,230 @@ class VoiceOutput:
             return []
         
         voices = self.engine.getProperty('voices')
-        return [(i, voice.name, voice.id) for i, voice in enumerate(voices)] if voices else []
-    
-    def is_available(self):
-        """Check if voice engine is available"""
-        return self.engine is not None
-    
-    def stop(self):
-        """Stop current speech"""
-        if self.engine:
-            try:
-                self.engine.stop()
-            except:
-                pass
+        if not voices:
+            return []
+        
+        return [
+            {
+                'id': i,
+                'name': voice.name,
+                'languages': voice.languages,
+                'gender': getattr(voice, 'gender', 'unknown')
+            }
+            for i, voice in enumerate(voices)
+        ]
     
     def cleanup(self):
-        """Clean up voice engine"""
+        """Clean up resources"""
+        print("Cleaning up voice output...")
+        
+        self.is_running = False
+        
+        # Stop current speech
+        self.stop_speaking()
+        
+        # Clear queue and send shutdown signal
+        self.clear_queue()
+        try:
+            self.speech_queue.put(None, block=False)
+        except queue.Full:
+            pass
+        
+        # Wait for speech thread to finish
+        if self.speech_thread and self.speech_thread.is_alive():
+            self.speech_thread.join(timeout=2.0)
+        
+        # Clean up engine
         if self.engine:
             try:
                 self.engine.stop()
-                del self.engine
-                self.engine = None
             except:
                 pass
+        
+        print("✅ Voice output cleanup completed!")
 
 
-# -------------------
-# Convenience Functions
-# -------------------
-
-# Global voice output instance
-_voice_output = None
-
-def initialize_voice_output(rate: int = 150, 
-                          volume: float = 0.8, 
-                          voice_index: int = 0,
-                          enable_console_output: bool = True):
-    """Initialize global voice output instance"""
-    global _voice_output
-    _voice_output = VoiceOutput(rate, volume, voice_index, enable_console_output)
-    return _voice_output
-
-def speak(text: str, blocking: bool = True):
-    """
-    Convenience function to speak text using global voice output
+class SpeechAnnouncer:
+    """Specialized speech announcer for Vision AI Assistant"""
     
-    Args:
-        text: Text to speak
-        blocking: Whether to wait for speech to complete
-    """
-    global _voice_output
-    if _voice_output is None:
-        _voice_output = initialize_voice_output()
+    def __init__(self, voice_output: VoiceOutput):
+        """
+        Initialize speech announcer
+        
+        Args:
+            voice_output: VoiceOutput instance
+        """
+        self.voice = voice_output
+        self.announcement_queue = queue.Queue()
+        self.is_announcing = False
     
-    _voice_output.speak(text, blocking)
-
-def speak_detection(label: str, steps: int, direction: str):
-    """
-    Convenience function to speak detection result
+    def announce_detection(self, detections, depths, directions):
+        """
+        Announce object detections
+        
+        Args:
+            detections: List of detected objects
+            depths: List of depth information
+            directions: List of direction information
+        """
+        if not detections:
+            self.voice.speak("No objects detected.")
+            return
+        
+        # Count objects by type
+        object_counts = {}
+        for det in detections:
+            label = det['label']
+            object_counts[label] = object_counts.get(label, 0) + 1
+        
+        # Create announcement
+        announcements = []
+        for label, count in object_counts.items():
+            if count == 1:
+                announcements.append(f"1 {label}")
+            else:
+                announcements.append(f"{count} {label}s")
+        
+        announcement = f"Detected: {', '.join(announcements)}."
+        self.voice.speak(announcement)
     
-    Args:
-        label: Object label
-        steps: Distance in steps
-        direction: Direction
-    """
-    global _voice_output
-    if _voice_output is None:
-        _voice_output = initialize_voice_output()
+    def announce_detailed_detection(self, detection, depth, direction):
+        """
+        Announce detailed detection information
+        
+        Args:
+            detection: Single detection object
+            depth: Depth information
+            direction: Direction information
+        """
+        label = detection['label']
+        distance_desc = depth.get('distance_description', f"{depth['distance_steps']} steps ahead")
+        direction_desc = direction.get('combined', 'center')
+        
+        announcement = f"{label}, {distance_desc} {direction_desc}."
+        self.voice.speak(announcement)
     
-    _voice_output.speak_detection(label, steps, direction)
-
-def speak_ai_response(response: str):
-    """Convenience function to speak AI response"""
-    global _voice_output
-    if _voice_output is None:
-        _voice_output = initialize_voice_output()
+    def announce_navigation(self, route_info):
+        """
+        Announce navigation information
+        
+        Args:
+            route_info: Route information dictionary
+        """
+        if not route_info:
+            self.voice.speak("No route information available.")
+            return
+        
+        distance = route_info.get('distance_formatted', 'unknown distance')
+        duration = route_info.get('duration_formatted', 'unknown time')
+        steps = route_info.get('steps', 0)
+        
+        announcement = f"Route found. Distance: {distance}, about {steps} steps. Estimated time: {duration}."
+        self.voice.speak(announcement)
     
-    _voice_output.speak_ai_response(response)
-
-def get_voice_output():
-    """Get global voice output instance"""
-    global _voice_output
-    if _voice_output is None:
-        _voice_output = initialize_voice_output()
-    return _voice_output
-
-
-# -------------------
-# Example Usage
-# -------------------
-
-if __name__ == "__main__":
-    print("Voice Output Module - Test")
-    print("=" * 40)
+    def announce_navigation_step(self, step_info):
+        """
+        Announce navigation step
+        
+        Args:
+            step_info: Navigation step information
+        """
+        instruction = step_info.get('instruction', 'Continue straight')
+        distance = step_info.get('distance', '')
+        
+        if distance:
+            announcement = f"{instruction} for {distance}."
+        else:
+            announcement = instruction
+        
+        self.voice.speak(announcement)
     
-    # Initialize voice output
-    voice = VoiceOutput(rate=150, volume=0.8)
+    def announce_error(self, error_message):
+        """Announce error message"""
+        self.voice.speak(f"Error: {error_message}")
     
-    if voice.is_available():
-        print("✅ Voice engine ready!")
+    def announce_status(self, status_message):
+        """Announce status message"""
+        self.voice.speak(status_message)
+
+
+def test_voice_output():
+    """Test voice output module"""
+    print("Testing voice output module...")
+    
+    try:
+        # Initialize voice output
+        voice = VoiceOutput(rate=150, volume=0.8)
         
         # Test basic speech
-        voice.speak("Vision AI assistant is ready.")
+        print("Testing basic speech...")
+        voice.speak("Hello, this is a test of the voice output system.")
         
-        # Test detection speech
-        voice.speak_detection("person", 3, "ahead")
-        voice.speak_detection("chair", 5, "left")
-        voice.speak_detection("laptop", 2, "right")
+        time.sleep(2)
         
-        # Test multiple detections
-        detections = [
-            {"label": "person", "steps": 1, "direction": "ahead"},
-            {"label": "chair", "steps": 4, "direction": "left"},
-            {"label": "laptop", "steps": 6, "direction": "right"}
+        # Test multiple speeches
+        print("Testing multiple speeches...")
+        voice.speak("First message")
+        voice.speak("Second message")
+        voice.speak("Third message")
+        
+        time.sleep(5)
+        
+        # Test immediate speech
+        print("Testing immediate speech...")
+        voice.speak_immediate("This is an immediate speech test.")
+        
+        time.sleep(2)
+        
+        # Test status
+        status = voice.get_status()
+        print(f"Voice status: {status}")
+        
+        # Test available voices
+        voices = voice.get_available_voices()
+        print(f"Available voices: {len(voices)}")
+        for voice_info in voices[:3]:  # Show first 3
+            print(f"  {voice_info['name']} ({voice_info['languages']})")
+        
+        time.sleep(2)
+        
+        # Test speech announcer
+        print("Testing speech announcer...")
+        announcer = SpeechAnnouncer(voice)
+        
+        # Test detection announcement
+        test_detections = [
+            {'label': 'person', 'confidence': 0.9},
+            {'label': 'chair', 'confidence': 0.8}
         ]
-        voice.speak_multiple_detections(detections)
+        test_depths = [
+            {'distance_steps': 3, 'distance_description': '3 steps ahead'},
+            {'distance_steps': 2, 'distance_description': '2 steps ahead'}
+        ]
+        test_directions = [
+            {'combined': 'center'},
+            {'combined': 'left'}
+        ]
         
-        # Test AI response
-        voice.speak_ai_response("I can see several objects around you. There's a person ahead, a chair on your left, and a laptop on your right.")
+        announcer.announce_detection(test_detections, test_depths, test_directions)
         
-        print("✅ Voice output test completed!")
+        time.sleep(3)
         
-    else:
-        print("❌ Voice engine not available!")
+        # Test detailed announcement
+        announcer.announce_detailed_detection(
+            test_detections[0], test_depths[0], test_directions[0]
+        )
+        
+        time.sleep(3)
+        
+    except Exception as e:
+        print(f"Test error: {e}")
+    finally:
+        if 'voice' in locals():
+            voice.cleanup()
     
-    # Cleanup
-    voice.cleanup()
+    print("✅ Voice output test completed!")
+
+
+if __name__ == "__main__":
+    test_voice_output()

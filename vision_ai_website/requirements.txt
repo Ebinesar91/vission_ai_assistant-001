@@ -1,0 +1,29 @@
+# Backend (FastAPI + Uvicorn)
+fastapi
+uvicorn[standard]
+python-multipart
+
+# AI / ML
+torch
+torchvision
+numpy
+opencv-python
+scipy
+pandas
+
+# Depth Estimation
+timm
+transformers
+
+# Speech
+pyttsx3
+vosk
+SpeechRecognition
+gTTS
+
+# Utilities
+requests
+Pillow
+
+# If using Jupyter
+notebook
